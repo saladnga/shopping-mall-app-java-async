@@ -38,7 +38,12 @@ public class Main {
     private static OrderManagement order;
     private static PaymentService payment;
     private static Reporting reporting;
+
     private static WishlistManagement wishlist;
+    private static AddWishlistManager addWishlist;
+    private static RemoveWishlistManager removeWishlist;
+    private static ViewWishlistManager viewWishlist;
+
     private static BrowseItemManager browseItem;
     private static CreateOrderManager createOrder;
     private static ViewAccountManager viewAccount;
@@ -84,10 +89,16 @@ public class Main {
         ItemRankingRepository itemRankingRepo = new com.repository.InMemoryItemRankingRepository();
 
         BrowseItemManager browseItemManager = new BrowseItemManager(itemRepo);
+
         CreateOrderManager createOrderManager = new CreateOrderManager(itemRepo, null, null);
         EditItemManager editItemManager = new EditItemManager(itemRepo);
         LikeManager likeManager = new LikeManager(itemRepo);
         RankingManager rankingManager = new RankingManager(itemRankingRepo, itemRepo);
+
+        WishlistRepository wishlistRepo = new SQLiteWishlistRepository(database);
+        addWishlist = new AddWishlistManager(wishlistRepo, itemRepo);
+        removeWishlist = new RemoveWishlistManager(wishlistRepo);
+        viewWishlist = new ViewWishlistManager(wishlistRepo, itemRepo);
 
         // --------------------------------------------------------------
         // 4. Init Subsystems
@@ -98,7 +109,7 @@ public class Main {
         order = new OrderManagement();
         payment = new PaymentService();
         reporting = new Reporting();
-        wishlist = new WishlistManagement();
+        wishlist = new WishlistManagement(wishlistRepo, itemRepo);
 
         Subsystems[] modules = {
                 account, item, messaging, order,
@@ -179,6 +190,26 @@ public class Main {
                 }
             }
         }));
+
+        broker.registerListener(EventType.WISHLIST_ADD_SUCCESS, msg -> {
+            System.out.println("Item added to wishlist successfully");
+            return CompletableFuture.completedFuture(null);
+        });
+
+        broker.registerListener(EventType.WISHLIST_ADD_FAILED, msg -> {
+            System.out.println("Failed to add item: " + msg.getPayload());
+            return CompletableFuture.completedFuture(null);
+        });
+
+        broker.registerListener(EventType.WISHLIST_REMOVE_SUCCESS, msg -> {
+            System.out.println("Item removed from wishlist successfully");
+            return CompletableFuture.completedFuture(null);
+        });
+
+        broker.registerListener(EventType.WISHLIST_REMOVE_FAILED, msg -> {
+            System.out.println("Failed to remove item: " + msg.getPayload());
+            return CompletableFuture.completedFuture(null);
+        });
 
         // Handle purchase/order responses
         broker.registerListener(EventType.ORDER_CONFIRMED, msg -> CompletableFuture.runAsync(() -> {
@@ -432,12 +463,14 @@ public class Main {
                 1. Browse Items
                 2. Search Items
                 3. View Wishlist
-                4. Purchase Item
-                5. View My Orders
-                6. Send Message
-                7. View Conversations
-                8. View Account
-                9. Logout
+                4. Add to Wishlist
+                5. Remove from Wishlist
+                6. Purchase Item
+                7. View My Orders
+                8. Send Message
+                9. View Conversations
+                10. View Account
+                11. Logout
                 Q. Quit
                 """);
     }
@@ -493,12 +526,14 @@ public class Main {
             case "1" -> browseItems();
             case "2" -> searchItem();
             case "3" -> viewWishlist();
-            case "4" -> purchaseItem();
-            case "5" -> viewOrderHistory();
-            case "6" -> sendMessage();
-            case "7" -> viewConversations();
-            case "8" -> viewAccount();
-            case "9" -> logout();
+            case "4" -> addToWishlist();
+            case "5" -> removeFromWishlist();
+            case "6" -> purchaseItem();
+            case "7" -> viewOrderHistory();
+            case "8" -> sendMessage();
+            case "9" -> viewConversations();
+            case "10" -> viewAccount();
+            case "11" -> logout();
         }
     }
 
@@ -565,8 +600,36 @@ public class Main {
     }
 
     private static void viewWishlist() {
+        WishlistViewRequest request = new WishlistViewRequest(currentUser.getId());
         broker.publish(EventType.WISHLIST_VIEW_REQUESTED,
-                new WishlistViewRequest(currentUser.getId()));
+                request);
+        System.out.println("Loading wishlist...");
+    }
+
+    private static void addToWishlist() {
+        System.out.print("Enter item ID to add to wishlist: ");
+        try {
+            int itemId = Integer.parseInt(scanner.nextLine());
+            WishlistAddRequest request = new WishlistAddRequest(currentUser.getId(), itemId, 1);
+
+            broker.publish(EventType.WISHLIST_ADD_REQUESTED, request);
+            System.out.println("Adding to wishlist...");
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid item ID");
+        }
+    }
+
+    private static void removeFromWishlist() {
+        System.out.print("Enter item ID to remove from wishlist: ");
+        try {
+            int itemId = Integer.parseInt(scanner.nextLine());
+            WishlistRemoveRequest request = new WishlistRemoveRequest(currentUser.getId(), itemId);
+
+            broker.publish(EventType.WISHLIST_REMOVE_REQUESTED, request);
+            System.out.println("Removing from wishlist...");
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid item ID");
+        }
     }
 
     private static void purchaseItem() {
