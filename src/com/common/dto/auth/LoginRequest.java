@@ -1,4 +1,4 @@
-package com.common.dto;
+package com.common.dto.auth;
 
 public class LoginRequest {
     private final String username;

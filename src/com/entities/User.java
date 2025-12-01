@@ -10,8 +10,8 @@ package com.entities;
 
 public class User {
     public enum Role {
-        Customer,
-        Staff,
+        CUSTOMER,
+        STAFF,
         CEO
     }
 
@@ -37,7 +37,7 @@ public class User {
         this.address = address;
     };
 
-    public int getID() {
+    public int getId() {
         return id;
     }
 
@@ -45,11 +45,11 @@ public class User {
         this.id = id;
     }
 
-    public String getUserName() {
+    public String getUsername() {
         return username;
     }
 
-    public void setUserName(String username) {
+    public void setUsername(String username) {
         this.username = username;
     }
 
@@ -100,7 +100,56 @@ public class User {
     }
 
     public boolean isAdmin() {
-        return role == Role.Staff || role == Role.CEO;
+        return role == Role.STAFF || role == Role.CEO;
+    }
+
+    public static class Builder {
+        private int id;
+        private String username;
+        private String email;
+        private String password;
+        private User.Role role;
+        private String phoneNumber;
+        private String address;
+
+        public Builder setId(int id) {
+            this.id = id;
+            return this;
+        }
+
+        public Builder setUsername(String username) {
+            this.username = username;
+            return this;
+        }
+
+        public Builder setEmail(String email) {
+            this.email = email;
+            return this;
+        }
+
+        public Builder setHashedPassword(String password) {
+            this.password = password;
+            return this;
+        }
+
+        public Builder setRole(Role role) {
+            this.role = role;
+            return this;
+        }
+
+        public Builder setPhoneNumber(String phone) {
+            this.phoneNumber = phone;
+            return this;
+        }
+
+        public Builder setAddress(String addr) {
+            this.address = addr;
+            return this;
+        }
+
+        public User build() {
+            return new User(id, username, email, password, role, phoneNumber, address);
+        }
     }
 
 }

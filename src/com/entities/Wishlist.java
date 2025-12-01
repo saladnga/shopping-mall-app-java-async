@@ -17,6 +17,8 @@ public class Wishlist {
     private long addedAt;
 
     public Wishlist() {
+        this.addedAt = System.currentTimeMillis();
+        this.quantity = 1;
 
     }
 
@@ -78,5 +80,20 @@ public class Wishlist {
         if (amount > 0 && this.quantity - amount >= 0) {
             this.quantity -= amount;
         }
+    }
+
+    public boolean isValidEntry() {
+        return customerId > 0 && itemId > 0 && quantity > 0;
+    }
+
+    @Override
+    public String toString() {
+        return "Wishlist{" +
+                "id=" + id +
+                ", customerId=" + customerId +
+                ", itemId=" + itemId +
+                ", quantity=" + quantity +
+                ", addedAt=" + addedAt +
+                '}';
     }
 }

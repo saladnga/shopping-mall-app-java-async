@@ -15,4 +15,18 @@ Returning a future allows the broker to dispatch to listeners without blocking; 
 @FunctionalInterface
 public interface Listener {
     CompletableFuture<Void> onMessage(Message message);
+
+    static CompletableFuture<Void> completed() {
+        return CompletableFuture.completedFuture(null);
+    }
+
+    static CompletableFuture<Void> delay(long ms) {
+        return CompletableFuture.runAsync(() -> {
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException ex) {
+
+            }
+        });
+    }
 }

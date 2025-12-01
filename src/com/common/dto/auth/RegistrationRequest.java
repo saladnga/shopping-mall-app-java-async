@@ -1,4 +1,4 @@
-package com.common.dto;
+package com.common.dto.auth;
 
 import com.entities.User.Role;
 

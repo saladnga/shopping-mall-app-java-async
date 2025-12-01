@@ -1,60 +1,72 @@
 package com.common;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.sql.*;
-import java.util.*;
-
-/**
- * Minimal database helper that opens a JDBC connection and runs the
- * `src/com/resources/schema.sql` file to initialize the schema.
- *
- * This keeps initialization outside of the business logic and lets
- * subsystems run DB calls from their async handlers.
- */
+import java.util.ArrayList;
+import java.util.List;
 
 public class Database {
+
     private Connection connection;
 
-    /**
-     * Connects to the provided JDBC URL and executes the project's SQL schema
-     * file to create tables if they do not exist.
-     *
-     * Example: connect("jdbc:h2:mem:shopping_mall")
-     */
-
-    public void connect(String url) {
+    /** Connect SQLite + load schema */
+    public synchronized void connect(String url) {
         try {
             connection = DriverManager.getConnection(url);
 
-            // Try to read schema file relative to project root
-            Path schemaPath = Path.of("src/com/resources/schema.sql");
-            if (Files.exists(schemaPath)) {
-                String sql = Files.readString(schemaPath);
-                String[] statements = sql.split(";\n");
-
-                try (Statement stmt = connection.createStatement()) {
-                    for (String s : statements) {
-                        String trim = s.trim();
-                        if (trim.isEmpty())
-                            continue;
-                        try {
-                            stmt.execute(trim);
-                        } catch (SQLException ex) {
-                            System.err.println("[Database] Failed to execute statement: " + ex.getMessage());
-                        }
-                    }
-                }
-
-                System.out.println("[Database] Schema executed from " + schemaPath.toString());
-            } else {
-                System.out.println("[Database] Schema file not found at: " + schemaPath.toString());
+            try (Statement st = connection.createStatement()) {
+                st.execute("PRAGMA journal_mode=WAL;");
+                st.execute("PRAGMA foreign_keys=ON;");
             }
 
+            runSchema();
+
             System.out.println("[Database] Connected to " + url);
-        } catch (SQLException | IOException e) {
-            System.err.println("[Database] Connect failed: " + e.getMessage());
+
+        } catch (Exception e) {
+            System.err.println("[Database] Connection failed: " + e.getMessage());
+        }
+    }
+
+    /** Load schema.sql from resources */
+    private void runSchema() {
+        try {
+            InputStream in = getClass().getResourceAsStream("/schema.sql");
+            if (in == null) {
+                System.err.println("[Database] schema.sql not found.");
+                return;
+            }
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(in));
+            StringBuilder sb = new StringBuilder();
+            String line;
+
+            while ((line = br.readLine()) != null) {
+                sb.append(line).append("\n");
+            }
+
+            String[] statements = sb.toString().split(";");
+
+            try (Statement st = connection.createStatement()) {
+                for (String raw : statements) {
+                    String sql = raw.trim();
+                    if (sql.isEmpty())
+                        continue;
+
+                    try {
+                        st.execute(sql);
+                    } catch (SQLException ex) {
+                        System.err.println("[Database] Schema error: " + ex.getMessage());
+                    }
+                }
+            }
+
+            System.out.println("[Database] Schema executed.");
+
+        } catch (Exception e) {
+            System.err.println("[Database] Failed loading schema: " + e.getMessage());
         }
     }
 
@@ -62,33 +74,148 @@ public class Database {
         return connection;
     }
 
-    public void close() {
-        if (connection != null) {
-            try {
-                connection.close();
-                System.out.println("[Database] Connection closed");
-            } catch (SQLException e) {
-                System.err.println("[Database] Close failed: " + e.getMessage());
-            }
-        }
-    }
+    // =====================================================================
+    // QUERY METHODS
+    // =====================================================================
 
-    // Lightweight placeholders - you can implement these as needed or use
-    // the provided SimpleDatabase for richer functionality.
-    public <T> T queryOne(String sql, Object param) {
+    /** Query 1 row */
+    public synchronized <T> T queryOne(String sql, ResultMapper<T> mapper, Object... params) {
+        if (connection == null)
+            return null;
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+
+            fillParams(ps, params);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next())
+                    return mapper.map(rs);
+            }
+
+        } catch (SQLException e) {
+            System.err.println("[Database] queryOne failed: " + e.getMessage());
+        }
         return null;
     }
 
-    public int executeUpdate(String sql, Object param) {
-        return 0;
+    /** Query list */
+    public synchronized <T> List<T> queryList(String sql, ResultMapper<T> mapper, Object... params) {
+
+        List<T> list = new ArrayList<>();
+        if (connection == null)
+            return list;
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            fillParams(ps, params);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next())
+                    list.add(mapper.map(rs));
+            }
+
+        } catch (SQLException e) {
+            System.err.println("[Database] queryList failed: " + e.getMessage());
+        }
+
+        return list;
     }
 
-    public void beginTransaction() {
+    /** Update / delete */
+    public synchronized int executeUpdate(String sql, Object... params) {
+        if (connection == null)
+            return 0;
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            fillParams(ps, params);
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("[Database] update failed: " + e.getMessage());
+            return 0;
+        }
     }
 
-    public void commit() {
+    // =====================================================================
+    // INSERT RETURN ID
+    // =====================================================================
+
+    public synchronized int executeInsertReturnId(String sql, Object... params) {
+        if (connection == null)
+            return -1;
+
+        try (PreparedStatement ps = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+
+            fillParams(ps, params);
+            ps.executeUpdate();
+
+            try (ResultSet rs = ps.getGeneratedKeys()) {
+                if (rs.next())
+                    return rs.getInt(1);
+            }
+
+        } catch (SQLException e) {
+            System.err.println("[Database] insert failed: " + e.getMessage());
+        }
+
+        return -1;
     }
 
-    public void rollback() {
+    // =====================================================================
+    // Transaction Control
+    // =====================================================================
+
+    public synchronized void beginTransaction() {
+        try {
+            if (connection != null)
+                connection.setAutoCommit(false);
+        } catch (SQLException e) {
+            System.err.println(e.getMessage());
+        }
+    }
+
+    public synchronized void commit() {
+        try {
+            if (connection != null) {
+                connection.commit();
+                connection.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            System.err.println(e.getMessage());
+        }
+    }
+
+    public synchronized void rollback() {
+        try {
+            if (connection != null) {
+                connection.rollback();
+                connection.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            System.err.println(e.getMessage());
+        }
+    }
+
+    // =====================================================================
+    // UTILITIES
+    // =====================================================================
+
+    private void fillParams(PreparedStatement ps, Object... params) throws SQLException {
+        for (int i = 0; i < params.length; i++) {
+            ps.setObject(i + 1, params[i]);
+        }
+    }
+
+    public synchronized void close() {
+        try {
+            if (connection != null)
+                connection.close();
+            System.out.println("[Database] Closed.");
+        } catch (SQLException e) {
+            System.err.println("[Database] Close failed: " + e.getMessage());
+        }
+    }
+
+    /** Result Mapper Interface */
+    public interface ResultMapper<T> {
+        T map(ResultSet rs) throws SQLException;
     }
 }

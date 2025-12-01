@@ -17,19 +17,23 @@ public class PaymentMethod {
     private String cardNumber;
     private String expiryDate;
     private String cardType;
+    private boolean isDefault;
+    private String maskedCardNumber; // **** **** **** 1234
 
     public PaymentMethod() {
 
     }
 
     public PaymentMethod(int id, int userId, String cardHolderName, String cardNumber, String expiryDate,
-            String cardType) {
+            String cardType, boolean isDefault, String maskedCardNumber) {
         this.id = id;
         this.userId = userId;
         this.cardHolderName = cardHolderName;
         this.cardNumber = cardNumber;
         this.expiryDate = expiryDate;
         this.cardType = cardType;
+        this.isDefault = isDefault;
+        this.maskedCardNumber = maskedCardNumber;
     }
 
     public int getId() {
@@ -80,9 +84,21 @@ public class PaymentMethod {
         this.cardType = cardType;
     }
 
-    public String getLast4Digit() {
+    public String getLast4Digits() {
         if (cardNumber == null || cardNumber.length() < 4)
             return "";
         return cardNumber.substring(cardNumber.length() - 4);
+    }
+
+    public boolean isDefault() {
+        return isDefault;
+    }
+
+    public void setDefault(boolean aDefault) {
+        isDefault = aDefault;
+    }
+
+    public String getMaskedCardNumber() {
+        return maskedCardNumber;
     }
 }

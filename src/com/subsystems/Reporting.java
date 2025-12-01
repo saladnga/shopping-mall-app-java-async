@@ -2,27 +2,41 @@ package com.subsystems;
 
 import com.broker.AsyncMessageBroker;
 import com.broker.EventType;
-import com.broker.Message;
-import java.util.concurrent.CompletableFuture;
-import com.entities.Report;
 import com.broker.Listener;
+import com.broker.Message;
+import com.entities.Report;
+import com.entities.User;
 
-// Handle timer events to generate and persist reports, publish REPORT_GENERATION_COMPLETE
-// On TIMER_TRIGGER_DAILY_REPORT, query database for sales during day range then create Report object, save to DB
-// CEO is allowed only to query reports -> enforce authorization when serving REPORT_VIEW_REQUESTED
+import java.time.Instant;
+import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
 
+/**
+ * Reporting Subsystem
+ * ------------------------------------------------------------
+ * - Generates DAILY & MONTHLY reports when triggered by TimeActor
+ * - Only CEO is allowed to view reports
+ * - generateReport() returns a FORM (structure only), not sample data
+ */
 public class Reporting implements Subsystems {
+
+    private static final Logger LOGGER = Logger.getLogger(Reporting.class.getName());
+
     private AsyncMessageBroker broker;
-    private Listener handleDailyReport = this::handleDailyReport;
-    private Listener handleMonthlyReport = this::handleMonthlyReport;
-    private Listener handleReportView = this::handleReportView;
+
+    private final Listener handleDailyReport = this::onDailyReportTriggered;
+    private final Listener handleMonthlyReport = this::onMonthlyReportTriggered;
+    private final Listener handleReportView = this::onReportViewRequested;
 
     @Override
     public void init(AsyncMessageBroker broker) {
         this.broker = broker;
+
         broker.registerListener(EventType.TIMER_TRIGGER_DAILY_REPORT, handleDailyReport);
         broker.registerListener(EventType.TIMER_TRIGGER_MONTHLY_REPORT, handleMonthlyReport);
         broker.registerListener(EventType.REPORT_VIEW_REQUESTED, handleReportView);
+
+        LOGGER.info("[Reporting] Subsystem initialized.");
     }
 
     @Override
@@ -34,37 +48,101 @@ public class Reporting implements Subsystems {
         broker.unregisterListener(EventType.TIMER_TRIGGER_DAILY_REPORT, handleDailyReport);
         broker.unregisterListener(EventType.TIMER_TRIGGER_MONTHLY_REPORT, handleMonthlyReport);
         broker.unregisterListener(EventType.REPORT_VIEW_REQUESTED, handleReportView);
+
+        LOGGER.info("[Reporting] Subsystem shutdown.");
     }
 
-    private CompletableFuture<Void> handleDailyReport(Message message) {
+    /** DAILY REPORT HANDLER */
+    private CompletableFuture<Void> onDailyReportTriggered(Message message) {
         return CompletableFuture.runAsync(() -> {
-            System.out.println("[Reporting] Generating daily report...");
-            broker.publish(EventType.REPORT_GENERATION_COMPLETE, "Daily report generated");
+
+            LOGGER.info("[Reporting] Generating DAILY report...");
+
+            Report report = generateReport(Report.ReportType.DAILY);
+
+            broker.publish(EventType.REPORT_GENERATION_COMPLETE, report);
+
         });
     }
 
-    private CompletableFuture<Void> handleMonthlyReport(Message message) {
+    /** MONTHLY REPORT HANDLER */
+    private CompletableFuture<Void> onMonthlyReportTriggered(Message message) {
         return CompletableFuture.runAsync(() -> {
-            System.out.println("[Reporting] Generating monthly report...");
-            broker.publish(EventType.REPORT_GENERATION_COMPLETE, "Monthly report generated");
+
+            LOGGER.info("[Reporting] Generating MONTHLY report...");
+
+            Report report = generateReport(Report.ReportType.MONTHLY);
+
+            broker.publish(EventType.REPORT_GENERATION_COMPLETE, report);
+
         });
     }
 
-    private CompletableFuture<Void> handleReportView(Message message) {
+    /** CEO REPORT VIEW HANDLER */
+    private CompletableFuture<Void> onReportViewRequested(Message message) {
         return CompletableFuture.runAsync(() -> {
-            System.out.println("[Reporting] Generating sales report...");
 
-            try {
-                Thread.sleep(1000); // Simulate report generation
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            Object payload = message.getPayload();
+            if (!(payload instanceof User viewer)) {
+                LOGGER.warning("[Reporting] Invalid payload for report view.");
                 return;
             }
 
-            String reportData = "Sales Report - Total Sales: $10,234.56, Orders: 42, Top Item: Laptop";
-            broker.publish(EventType.REPORT_DETAILS_RETURNED, reportData);
+            // Authorization check
+            if (viewer.getRole() != User.Role.CEO) {
+                broker.publish(EventType.REPORT_DETAILS_RETURNED,
+                        "ACCESS DENIED: Only CEO can view reports.");
+                return;
+            }
 
-            System.out.println("[Reporting] Sales report generated");
+            LOGGER.info("[Reporting] CEO requesting report view.");
+
+            // Only return form, not sample data
+            String reportStructure = """
+                    --- REPORT STRUCTURE ---
+                    TYPE: DAILY or MONTHLY
+                    DATE RANGE: dynamic
+                    FIELDS:
+                      - totalSales
+                      - totalOrders
+                      - items: [
+                           { productId, productName, quantitySold }
+                        ]
+                      - generatedAt
+                    -------------------------
+                    """;
+
+            broker.publish(EventType.REPORT_DETAILS_RETURNED, reportStructure);
         });
+    }
+
+    /**
+     * generateReport(): returns a STRUCTURE ONLY, not actual numbers
+     */
+    private Report generateReport(Report.ReportType type) {
+
+        long now = Instant.now().toEpochMilli();
+
+        String jsonForm = """
+                    {
+                      "reportType": "%s",
+                      "generatedAt": %d,
+                      "structure": {
+                        "totalSales": "<number>",
+                        "totalOrders": "<number>",
+                        "items": [
+                          { "productId": "<id>", "quantitySold": "<number>" }
+                        ]
+                      }
+                    }
+                """.formatted(type, now);
+
+        return new Report(
+                0, // id (not persisted yet)
+                type, // DAILY or MONTHLY
+                now, // dateStart (placeholder)
+                now, // dateGenerated
+                jsonForm // STRUCTURE ONLY
+        );
     }
 }

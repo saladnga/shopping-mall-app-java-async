@@ -1,37 +1,34 @@
 package com.subsystems;
 
-import com.broker.AsyncMessageBroker;
-import com.broker.EventType;
-import com.broker.Message;
-
-import java.util.Arrays;
-import java.util.concurrent.CompletableFuture;
-import com.broker.Listener;
+import com.broker.*;
 import com.entities.Order;
 import com.entities.Order.OrderStatus;
-import java.util.List;
 
-// Process ORDER_CREATED_REQUEST and PURCHASE flows, manage order history, cancellation
-// Reserve inventory, create order record, publish PAYMENT_AUTHORIZATION_REQUESTED
-// On PAYMENT_AUTHORIZED: mark order confirmed and publish EMAIL_RECEIPT_REQUESTED
-// On cancellation: publish REFUND_PROCESS_REQUESTED, update order status
+import java.util.List;
+import java.util.Arrays;
+import java.util.concurrent.CompletableFuture;
 
 public class OrderManagement implements Subsystems {
+
     private AsyncMessageBroker broker;
-    private Listener handleOrderCancel = this::handleOrderCancel;
-    private Listener handleOrderCreated = this::handleOrderCreated;
-    private Listener handlePaymentAuthorized = this::handlePaymentAuthorized;
-    private Listener handlePurchase = this::handlePurchase;
-    private Listener handleOrderHistory = this::handleOrderHistory;
+
+    private final Listener handleOrderCreate = this::onOrderCreate;
+    private final Listener handleOrderCancel = this::onCancel;
+    private final Listener handleAuthSuccess = this::onPaymentAuthorized;
+    private final Listener handlePurchase = this::onPurchase;
+    private final Listener handleHistory = this::onHistoryRequest;
 
     @Override
     public void init(AsyncMessageBroker broker) {
         this.broker = broker;
-        broker.registerListener(EventType.ORDER_CREATED_REQUESTED, handleOrderCreated);
+
+        broker.registerListener(EventType.ORDER_CREATED_REQUESTED, handleOrderCreate);
         broker.registerListener(EventType.ORDER_CANCEL_REQUESTED, handleOrderCancel);
-        broker.registerListener(EventType.PAYMENT_AUTHORIZED, handlePaymentAuthorized);
+        broker.registerListener(EventType.PAYMENT_AUTHORIZED, handleAuthSuccess);
         broker.registerListener(EventType.PURCHASE_REQUESTED, handlePurchase);
-        broker.registerListener(EventType.ORDER_HISTORY_REQUESTED, handleOrderHistory);
+        broker.registerListener(EventType.ORDER_HISTORY_REQUESTED, handleHistory);
+
+        System.out.println("[OrderManagement] Initialized.");
     }
 
     @Override
@@ -40,62 +37,94 @@ public class OrderManagement implements Subsystems {
 
     @Override
     public void shutdown() {
-        broker.unregisterListener(EventType.ORDER_CREATED_REQUESTED, handleOrderCreated);
-        broker.registerListener(EventType.ORDER_CANCEL_REQUESTED, handleOrderCancel);
-        broker.unregisterListener(EventType.PAYMENT_AUTHORIZED, handlePaymentAuthorized);
+        broker.unregisterListener(EventType.ORDER_CREATED_REQUESTED, handleOrderCreate);
+        broker.unregisterListener(EventType.ORDER_CANCEL_REQUESTED, handleOrderCancel);
+        broker.unregisterListener(EventType.PAYMENT_AUTHORIZED, handleAuthSuccess);
+        broker.unregisterListener(EventType.PURCHASE_REQUESTED, handlePurchase);
+        broker.unregisterListener(EventType.ORDER_HISTORY_REQUESTED, handleHistory);
+
+        System.out.println("[OrderManagement] Shutdown complete.");
     }
 
-    private CompletableFuture<Void> handleOrderCreated(Message message) {
-        // Async order creation flow
+    // ============================================================
+    // ORDER_CREATED_REQUESTED
+    // ============================================================
+    private CompletableFuture<Void> onOrderCreate(Message m) {
+
         return CompletableFuture.runAsync(() -> {
-            System.out.println("[Order Management] Creating order...");
+            Order order = (Order) m.getPayload();
 
-            // Example
-            Order order = new Order(1, 1, System.currentTimeMillis(), Order.OrderStatus.PLACE, 99.99, "E-35");
+            System.out.println("[OrderManagement] Creating order " + order.getId());
 
+            // publish correctly with broker.publish(...)
             broker.publish(EventType.PURCHASE_REQUESTED, order);
-            System.out.println("[Order Management] Order created - order: " + order.getId());
+
+            System.out.println("[OrderManagement] Order created.");
         });
     }
 
-    private CompletableFuture<Void> handleOrderCancel(Message message) {
-        return CompletableFuture
-                .runAsync(() -> {
-                    System.out.println("[Order Management] Processing order cancellation, processing refund");
-                    broker.publish(EventType.REFUND_PROCESS_REQUESTED, message.getPayload());
-                });
-    }
+    // ============================================================
+    // PURCHASE_REQUESTED
+    // ============================================================
+    private CompletableFuture<Void> onPurchase(Message m) {
 
-    private CompletableFuture<Void> handlePaymentAuthorized(Message message) {
-        return CompletableFuture
-                .runAsync(() -> {
-                    System.out.println("[Order Management] Payment authorized, confirming order...");
-                    broker.publish(EventType.EMAIL_RECEIPT_REQUESTED, message.getPayload());
-                });
-    }
-
-    private CompletableFuture<Void> handlePurchase(Message message) {
         return CompletableFuture.runAsync(() -> {
-            System.out.println("[Order Management] Processing purchase:" + message.getPayload());
+            Order order = (Order) m.getPayload();
 
-            Order order = new Order(1, 1, System.currentTimeMillis(), Order.OrderStatus.PLACE, 99.99,
-                    "123 Main Street");
+            System.out.println("[OrderManagement] Purchase started for order " + order.getId());
 
             broker.publish(EventType.PAYMENT_AUTHORIZATION_REQUESTED, order);
-            System.out.println("[Order Management] Order created, requesting payment");
         });
     }
 
-    private CompletableFuture<Void> handleOrderHistory(Message message) {
+    // ============================================================
+    // PAYMENT_AUTHORIZED
+    // ============================================================
+    private CompletableFuture<Void> onPaymentAuthorized(Message m) {
+
         return CompletableFuture.runAsync(() -> {
-            System.out.println("[Order Management] Loading order history...");
+            Order order = (Order) m.getPayload();
 
-            List<Order> orders = Arrays.asList(
-                    new Order(1, 1, System.currentTimeMillis(), OrderStatus.DELIVERED, 99.99, "Main street"),
-                    new Order(2, 1, System.currentTimeMillis() - 86400, OrderStatus.DELIVERED, 99.99, "Main street"));
+            // FIX: OrderStatus.PLACE does NOT exist → use PLACED
+            order.setStatus(OrderStatus.PLACED);
 
-            broker.publish(EventType.ORDER_HISTORY_RETURNED, orders);
-            System.out.println("[Order Management] Order history loaded");
+            System.out.println("[OrderManagement] Payment authorized – confirming order...");
+
+            broker.publish(EventType.ORDER_CONFIRMED, order);
+            broker.publish(EventType.EMAIL_RECEIPT_REQUESTED, order);
+            broker.publish(EventType.SHIPPING_REQUESTED, order.getId());
+        });
+    }
+
+    // ============================================================
+    // ORDER_CANCEL_REQUESTED
+    // ============================================================
+    private CompletableFuture<Void> onCancel(Message m) {
+
+        return CompletableFuture.runAsync(() -> {
+            Order order = (Order) m.getPayload();
+
+            System.out.println("[OrderManagement] Cancelling order " + order.getId());
+
+            broker.publish(EventType.REFUND_PROCESS_REQUESTED, order);
+            broker.publish(EventType.ORDER_CANCEL_SUCCESS, order);
+        });
+    }
+
+    // ============================================================
+    // ORDER_HISTORY_REQUESTED
+    // ============================================================
+    private CompletableFuture<Void> onHistoryRequest(Message message) {
+
+        return CompletableFuture.runAsync(() -> {
+
+            List<Order> data = Arrays.asList(
+                    new Order(1, 1, System.currentTimeMillis(), OrderStatus.DELIVERED, 89.5, "A1 Street"),
+                    new Order(2, 1, System.currentTimeMillis(), OrderStatus.PLACED, 129.0, "A1 Street"));
+
+            broker.publish(EventType.ORDER_HISTORY_RETURNED, data);
+
+            System.out.println("[OrderManagement] Order history returned.");
         });
     }
 }

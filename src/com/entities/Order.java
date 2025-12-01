@@ -13,7 +13,7 @@ package com.entities;
 
 public class Order {
     public enum OrderStatus {
-        PLACE,
+        PLACED,
         SHIPPED,
         DELIVERED,
         CANCELED
@@ -89,6 +89,6 @@ public class Order {
     }
 
     public boolean canCancel() {
-        return status == OrderStatus.PLACE;
+        return status == OrderStatus.PLACED;
     }
 }

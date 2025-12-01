@@ -1,57 +1,53 @@
 package com.subsystems;
 
-import com.broker.AsyncMessageBroker;
-import com.broker.EventType;
-import com.broker.Message;
-
+import com.broker.*;
 import java.util.concurrent.CompletableFuture;
-import com.broker.Listener;
-
-// handle PAYMENT_AUTHORIZATION_REQUESTED
-// Use AuthenticationService to simulate payment processing
-// On success publish PAYMENT_AUTHORIZED, on failure publish PAYMENT_DENIED
 
 public class PaymentService implements Subsystems {
+
     private AsyncMessageBroker broker;
-    private Listener handlePaymentAuth = this::handlePaymentAuth;
+
+    private final Listener handlePaymentAuth = this::processAuthorization;
 
     @Override
     public void init(AsyncMessageBroker broker) {
         this.broker = broker;
         broker.registerListener(EventType.PAYMENT_AUTHORIZATION_REQUESTED, handlePaymentAuth);
+        System.out.println("[PaymentService] Initialized");
     }
 
     @Override
     public void start() {
-
     }
 
     @Override
     public void shutdown() {
-        broker.unregisterListener(EventType.PAYMENT_AUTHORIZATION_REQUESTED, this::handlePaymentAuth);
+        broker.unregisterListener(EventType.PAYMENT_AUTHORIZATION_REQUESTED, handlePaymentAuth);
+        System.out.println("[PaymentService] Shutdown complete");
     }
 
-    private CompletableFuture<Void> handlePaymentAuth(Message message) {
-        return CompletableFuture
-                .runAsync(() -> {
-                    // Simulate async payment processing (network call to payment gateway)
-                    System.out.println("[PaymentService] Processing payment authorization...");
-                    try {
-                        Thread.sleep(1000); // Simulate network delay
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
+    private CompletableFuture<Void> processAuthorization(Message message) {
 
-                    // Simulate payment success/failure (90% success rate)
-                    if (Math.random() > 0.1) {
-                        broker.publish(EventType.PAYMENT_AUTHORIZED, message.getPayload());
-                        System.out.println("[Payment Service] Payment authorized");
-                    } else {
-                        broker.publish(EventType.PAYMENT_DENIED, message.getPayload());
-                        System.out.println("[Payment Service] Payment denied");
-                        ;
-                    }
-                });
+        return CompletableFuture.runAsync(() -> {
+
+            System.out.println("[PaymentService] Processing payment authorization...");
+
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {
+            }
+
+            boolean success = Math.random() > 0.1;
+
+            Object payload = message.getPayload();
+
+            if (success) {
+                broker.publish(EventType.PAYMENT_AUTHORIZED, payload);
+                System.out.println("[PaymentService] Payment authorized.");
+            } else {
+                broker.publish(EventType.PAYMENT_DENIED, payload);
+                System.out.println("[PaymentService] Payment denied.");
+            }
+        });
     }
 }

@@ -30,11 +30,11 @@ public class Item {
         this.likeCount = likeCount;
     }
 
-    public int getID() {
+    public int getId() {
         return id;
     }
 
-    public void setID(int id) {
+    public void setId(int id) {
         this.id = id;
     }
 
@@ -80,5 +80,9 @@ public class Item {
 
     public boolean canAddToWishList() {
         return stockQuantity > 0;
+    }
+
+    public void decreaseQuantity(int quantity) {
+        this.stockQuantity = Math.max(0, this.stockQuantity - quantity);
     }
 }
