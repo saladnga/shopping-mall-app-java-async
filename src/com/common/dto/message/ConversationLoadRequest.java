@@ -3,6 +3,7 @@ package com.common.dto.message;
 /**
  * DTO for loading a specific conversation between users
  */
+
 public class ConversationLoadRequest {
     private final int userId;
     private final int otherUserId;

@@ -13,6 +13,7 @@ package com.common.dto.item;
  *
  * This DTO is immutable and thread-safe.
  */
+
 public class ItemRankingRequest {
 
     private final String category;

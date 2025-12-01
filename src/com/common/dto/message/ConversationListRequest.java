@@ -3,6 +3,7 @@ package com.common.dto.message;
 /**
  * DTO for requesting conversation list for a user
  */
+
 public class ConversationListRequest {
     private final int userId;
 
