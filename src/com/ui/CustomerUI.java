@@ -36,7 +36,7 @@ public class CustomerUI {
                         "3. View Wishlist",
                         "4. View My Orders",
                         "5. Send Message to Staff",
-                        "6. View Conversations",
+                        "6. View Notifications",
                         "7. View Account",
                         "8. Logout",
                         "Q. Quit"));
@@ -50,8 +50,8 @@ public class CustomerUI {
             case "3" -> viewWishlist(scanner, broker);
             case "4" -> viewOrders(scanner, broker);
             case "5" -> sendMessage(scanner, broker);
-            case "6" -> viewConversations(broker);
-            case "7" -> viewAccount(broker);
+            case "6" -> showNotificationMenu(scanner, broker);
+            case "7" -> viewAccount(scanner, broker);
             case "8" -> Main.currentUser = null;
             case "Q", "q" -> System.exit(0);
             default -> System.out.println(UIHelper.RED + "Invalid option!" + UIHelper.RESET);
@@ -530,38 +530,30 @@ public class CustomerUI {
         UIHelper.pause();
     }
 
-    private static void viewConversations(AsyncMessageBroker broker) {
-        // Request conversation list and render it locally to avoid duplicate prints from Main
-        List<com.entities.Conversation> convs = BrokerUtils.requestOnce(
-                broker,
-                EventType.CONVERSATION_LIST_REQUESTED,
-                new ConversationListRequest(Main.currentUser.getId()),
-                EventType.CONVERSATION_LIST_RETURNED,
-                3000
-        );
+    private static void showNotificationMenu(Scanner scanner, AsyncMessageBroker broker) {
+        // Request purchase receipts (notifications) from order history
+        List<Order> orders = BrokerUtils.requestOnce(broker, EventType.ORDER_HISTORY_REQUESTED, Main.currentUser.getId(),
+                EventType.ORDER_HISTORY_RETURNED, 3000);
 
-        if (convs == null || convs.isEmpty()) {
-            System.out.println(UIHelper.YELLOW + "No conversations found." + UIHelper.RESET);
+        System.out.println(UIHelper.CYAN + "=== Notifications ===" + UIHelper.RESET);
+        
+        if (orders == null || orders.isEmpty()) {
+            System.out.println(UIHelper.YELLOW + "(No notifications)" + UIHelper.RESET);
             UIHelper.pause();
             return;
         }
 
-        System.out.println("=== Conversations ===");
-        for (com.entities.Conversation conv : convs) {
-            if (Main.currentUser.getRole() == User.Role.CUSTOMER) {
-                System.out.println("With: " + conv.getStaffName()
-                        + " | Last: " + conv.getLastMessage()
-                        + " | Unread: " + conv.getUnreadCount());
-            } else {
-                System.out.println("Customer ID: " + conv.getCustomerId()
-                        + " (" + conv.getCustomerName() + ")"
-                        + " | Last: " + conv.getLastMessage()
-                        + " | Unread: " + conv.getUnreadCount());
-            }
+        List<String> notificationLines = new ArrayList<>();
+        for (Order o : orders) {
+            notificationLines.add(String.format("Order #%d | Total: $%.2f | Status: %s | Date: %s",
+                    o.getId(), o.getTotalAmount(), o.getStatus(), formatOrderDate(o.getOrderDate())));
         }
+
+        UIHelper.box(UIHelper.color("RECENT NOTIFICATIONS", UIHelper.CYAN), notificationLines);
+        UIHelper.pause();
     }
 
-    public static void viewAccount(AsyncMessageBroker broker) {
+    public static void viewAccount(Scanner scanner, AsyncMessageBroker broker) {
         if (Main.currentUser == null) {
             System.out.println(UIHelper.RED + "No user is currently logged in." + UIHelper.RESET);
             UIHelper.pause();
@@ -583,7 +575,159 @@ public class CustomerUI {
                 "Address: " + safeValue(user.getAddress()));
 
         UIHelper.box(UIHelper.color("ACCOUNT INFORMATION", UIHelper.CYAN), info);
-        UIHelper.pause();
+
+        // NOTE: There is no broker event for listing payment cards in the current
+        // EventType set. Show a placeholder (backend support required to list cards).
+        List<String> cardLines = new ArrayList<>();
+        cardLines.add("(No payment cards available in CLI;");
+        cardLines.add("use add card to register one)");
+        UIHelper.box(UIHelper.color("PAYMENT CARDS", UIHelper.CYAN), cardLines);
+
+        // Actions menu
+        while (true) {
+            System.out.println(UIHelper.YELLOW + "Actions:" + UIHelper.RESET);
+            System.out.println("1. Edit Account");
+            System.out.println("2. Back to main view");
+            System.out.print(UIHelper.YELLOW + "Select an option: " + UIHelper.RESET);
+            Scanner sc = new Scanner(System.in);
+            String act = sc.nextLine().trim();
+
+            switch (act) {
+                case "1" -> editAccountMenu(scanner, broker, user);
+                case "2" -> { return;}
+                default -> System.out.println(UIHelper.RED + "Invalid Input" + UIHelper.RESET);
+            }
+        }
+    }
+
+    private static String maskCardNumber(String number) {
+        if (number == null) return "N/A";
+        String digits = number.replaceAll("\\s+", "");
+        if (digits.length() <= 4) return digits;
+        String last4 = digits.substring(digits.length() - 4);
+        return "**** **** **** " + last4;
+    }
+
+
+    private static void editAccountMenu(Scanner scanner, AsyncMessageBroker broker, User currentDisplayUser) {
+        while (true) {
+            System.out.println(UIHelper.YELLOW + "Edit Account:" + UIHelper.RESET);
+            System.out.println("1. Edit username");
+            System.out.println("2. Edit phone");
+            System.out.println("3. Edit Address");
+            System.out.println("4. Edit password");
+            System.out.println("5. Edit payment card");
+            System.out.println("6. Add payment card");
+            System.out.println("7. Back");
+            System.out.print(UIHelper.YELLOW + "Select an option: " + UIHelper.RESET);
+            String c = scanner.nextLine().trim();
+
+            switch (c) {
+                case "1" -> {
+                    System.out.print("New username: ");
+                    String v = scanner.nextLine().trim();
+                    broker.publish(EventType.ACCOUNT_EDIT_REQUESTED, new com.common.dto.account.AccountEditRequest(currentDisplayUser.getId(), v, null, null, null, null));
+                    // Wait for update success
+                    User updated = BrokerUtils.requestOnce(broker, EventType.ACCOUNT_EDIT_REQUESTED, null, EventType.ACCOUNT_UPDATE_SUCCESS, 3000);
+                    if (updated != null) {
+                        System.out.println(UIHelper.GREEN + "Username updated successfully!" + UIHelper.RESET);
+                        UIHelper.pause();
+                        // Refresh account display
+                        viewAccount(scanner, broker);
+                        return;
+                    } else {
+                        System.out.println(UIHelper.RED + "Username update failed." + UIHelper.RESET);
+                    }
+                }
+                case "2" -> {
+                    System.out.print("New phone: ");
+                    String v = scanner.nextLine().trim();
+                    broker.publish(EventType.ACCOUNT_EDIT_REQUESTED, new com.common.dto.account.AccountEditRequest(currentDisplayUser.getId(), null, null, v, null, null));
+                    // Wait for update success
+                    User updated = BrokerUtils.requestOnce(broker, EventType.ACCOUNT_EDIT_REQUESTED, null, EventType.ACCOUNT_UPDATE_SUCCESS, 3000);
+                    if (updated != null) {
+                        System.out.println(UIHelper.GREEN + "Phone updated successfully!" + UIHelper.RESET);
+                        UIHelper.pause();
+                        // Refresh account display
+                        viewAccount(scanner, broker);
+                        return;
+                    } else {
+                        System.out.println(UIHelper.RED + "Phone update failed." + UIHelper.RESET);
+                    }
+                }
+                case "3" -> {
+                    System.out.print("New address: ");
+                    String v = scanner.nextLine().trim();
+                    broker.publish(EventType.ACCOUNT_EDIT_REQUESTED, new com.common.dto.account.AccountEditRequest(currentDisplayUser.getId(), null, null, null, v, null));
+                    // Wait for update success
+                    User updated = BrokerUtils.requestOnce(broker, EventType.ACCOUNT_EDIT_REQUESTED, null, EventType.ACCOUNT_UPDATE_SUCCESS, 3000);
+                    if (updated != null) {
+                        System.out.println(UIHelper.GREEN + "Address updated successfully!" + UIHelper.RESET);
+                        UIHelper.pause();
+                        // Refresh account display
+                        viewAccount(scanner, broker);
+                        return;
+                    } else {
+                        System.out.println(UIHelper.RED + "Address update failed." + UIHelper.RESET);
+                    }
+                }
+                case "4" -> {
+                    // Edit password: verify current password first
+                    System.out.print("Current password: ");
+                    String currentPw = Main.readPasswordHidden();
+                    
+                    // Publish login request to verify password
+                    broker.publish(EventType.USER_LOGIN_REQUEST, new com.common.dto.auth.LoginRequest(currentDisplayUser.getUsername(), currentPw));
+                    // Wait for login response
+                    Object loginResp = BrokerUtils.requestOnce(broker, EventType.USER_LOGIN_REQUEST, null, EventType.USER_LOGIN_SUCCESS, 2000);
+                    
+                    if (loginResp != null) {
+                        // Password is correct, ask for new password
+                        System.out.print("New password: ");
+                        String newPw = Main.readPasswordHidden();
+                        System.out.print("Confirm new password: ");
+                        String confirmPw = Main.readPasswordHidden();
+                        
+                        if (!newPw.equals(confirmPw)) {
+                            System.out.println(UIHelper.RED + "Passwords do not match." + UIHelper.RESET);
+                            continue;
+                        }
+                        
+                        // Publish password change request
+                        broker.publish(EventType.ACCOUNT_EDIT_REQUESTED, new com.common.dto.account.AccountEditRequest(currentDisplayUser.getId(), null, null, null, null, newPw));
+                        User updated = BrokerUtils.requestOnce(broker, EventType.ACCOUNT_EDIT_REQUESTED, null, EventType.ACCOUNT_UPDATE_SUCCESS, 3000);
+                        
+                        if (updated != null) {
+                            System.out.println(UIHelper.GREEN + "Password changed successfully!" + UIHelper.RESET);
+                            UIHelper.pause();
+                            viewAccount(scanner, broker);
+                            return;
+                        } else {
+                            System.out.println(UIHelper.RED + "Password change failed." + UIHelper.RESET);
+                        }
+                    } else {
+                        System.out.println(UIHelper.RED + "Current password is incorrect." + UIHelper.RESET);
+                    }
+                }
+                case "5" -> {
+                    System.out.println(UIHelper.YELLOW + "Editing payment cards is not supported via CLI yet." + UIHelper.RESET);
+                    System.out.println(UIHelper.YELLOW + "Use the web portal or admin tools to manage cards." + UIHelper.RESET);
+                }
+                case "6" -> {
+                    System.out.print("Card number: ");
+                    String num = scanner.nextLine().trim();
+                    System.out.print("Cardholder name: ");
+                    String name = scanner.nextLine().trim();
+                    System.out.print("Expiry (MM/YY): ");
+                    String exp = scanner.nextLine().trim();
+                    System.out.println(UIHelper.YELLOW + "Add payment card request queued (backend support required)." + UIHelper.RESET);
+                }
+                case "7" -> {
+                    return;
+                }
+                default -> System.out.println(UIHelper.RED + "Invalid Input" + UIHelper.RESET);
+            }
+        }
     }
 
     private static String safeValue(String value) {

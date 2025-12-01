@@ -31,109 +31,156 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.Scanner;
 import java.io.Console;     // For hidden password input
+import java.time.format.DateTimeFormatter;
 
 public class Main {
 
+    // ============================================================
+    // STATE
+    // ============================================================
+
+    private static final DateTimeFormatter ORDER_DATE_FORMATTER =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
     public static User currentUser = null;
     private static final Scanner scanner = new Scanner(System.in);
+
+    private static boolean selectingItem = false;
+    private static boolean inWishlistMenu = false;
+    private static boolean inPaymentCardMenu = false;
+    private static boolean inNotificationMenu = false;
+
+    private static int selectedItemId = -1;
+    private static String lastMenu = "GUEST";
+    private static OrderCreateRequest pendingOrderRequest = null;
+
+    // ============================================================
+    // CORE SERVICES
+    // ============================================================
+
+    private static AsyncMessageBroker broker;
+    private static Database database;
 
     // Subsystems
     private static AccountManagement account;
     private static ItemManagement item;
     private static Messaging messaging;
-    private static OrderManagement order;
-    private static PaymentService payment;
+    private static OrderManagement orderSubsystem;
+    private static PaymentService paymentSubsystem;
     private static Reporting reporting;
+    private static WishlistManagement wishlistSubsystem;
+    private static ItemRepository itemRepository;
+    private static OrderRepository orderRepository;
+    private static OrderItemRepository orderItemRepository;
 
-    private static WishlistManagement wishlist;
-    private static AddWishlistManager addWishlist;
-    private static RemoveWishlistManager removeWishlist;
-    private static ViewWishlistManager viewWishlist;
+    // Payment Managers (Option A)
+    private static PaymentCardManager paymentCardManager;
+    private static PaymentAuthorizationManager paymentAuthManager;
+    private static PaymentTransactionManager paymentTxnManager;
+    private static PaymentControllerManager paymentController;
 
-    private static BrowseItemManager browseItem;
-    private static CreateOrderManager createOrder;
-    private static ViewAccountManager viewAccount;
-
-
-    // Broker + DB
-    private static AsyncMessageBroker broker;
-    private static Database database;
+    private static NotificationRepository notificationRepo;
 
     // Secret codes for staff/CEO registration
     private static final String STAFF_SECRET_CODE = "STAFF2025";
     private static final String CEO_SECRET_CODE = "CEO2025";
 
+    // ============================================================
+    // MAIN
+    // ============================================================
+
     public static void main(String[] args) {
         UIHelper.clear();
         System.out.println(UIHelper.CYAN + "[Main] Shopping Mall Application Starting..." + UIHelper.RESET);
 
-        // --------------------------------------------------------------
-        // 1. Init Broker
-        // --------------------------------------------------------------
+        // ------------------------------------------------------------
+        // INIT BROKER
+        // ------------------------------------------------------------
         broker = new AsyncMessageBroker(1000, 8);
         broker.start();
 
-        // --------------------------------------------------------------
-        // 2. Init DB
-        // --------------------------------------------------------------
+        // ------------------------------------------------------------
+        // INIT DATABASE
+        // ------------------------------------------------------------
         database = new Database();
         database.connect("jdbc:sqlite:shopping_mall.db");
 
-        // --------------------------------------------------------------
-        // 3. Init Repositories + Services
-        // --------------------------------------------------------------
-        // AuthenticationService has no-arg constructor; create it first
+        // ------------------------------------------------------------
+        // INIT REPOSITORIES
+        // ------------------------------------------------------------
         AuthenticationService authService = new AuthenticationService();
 
-        // SQLiteUserRepository requires Database + AuthenticationService
         UserRepository userRepo = new SQLiteUserRepository(database, authService);
-
-        // Managers for account subsystem
-        RegisterManager registerManager = new RegisterManager(userRepo,
-                authService);
-        LoginManager loginManager = new LoginManager(userRepo, authService);
-        EditAccountManager editAccountManager = new EditAccountManager(userRepo, authService);
-        ViewAccountManager viewAccountManager = new ViewAccountManager(userRepo);
-
-        // Item repository (persisted in SQLite)
-        ItemRepository itemRepo = new SQLiteItemRepository(database);
-        ItemRankingRepository itemRankingRepo = new com.repository.InMemoryItemRankingRepository();
-
-        ReportRepository reportRepo = new SQLiteReportRepository(database);
-        ReportManager reportManager = new ReportManager(reportRepo, null, itemRepo); // null for OrderRepository until implemented
-                                                                        
-        BrowseItemManager browseItemManager = new BrowseItemManager(itemRepo);
-
-        CreateOrderManager createOrderManager = new CreateOrderManager(itemRepo, null, null);
-        EditItemManager editItemManager = new EditItemManager(itemRepo);
-        LikeManager likeManager = new LikeManager(itemRepo);
-        RankingManager rankingManager = new RankingManager(itemRankingRepo, itemRepo);
-
+        itemRepository = new SQLiteItemRepository(database);
+        ItemRankingRepository rankingRepo = new InMemoryItemRankingRepository();
         WishlistRepository wishlistRepo = new SQLiteWishlistRepository(database);
-        AddWishlistManager addWishlist = new AddWishlistManager(wishlistRepo, itemRepo);
-        RemoveWishlistManager removeWishlist = new RemoveWishlistManager(wishlistRepo);
-        ViewWishlistManager viewWishlist = new ViewWishlistManager(wishlistRepo, itemRepo);
+        PaymentCardRepository cardRepo = new SQLitePaymentCardRepository(database);
+        PaymentTransactionRepository txnRepo = new SQLitePaymentTransactionRepository(database);
 
 
-        // --------------------------------------------------------------
-        // 4. Init Subsystems
-        // --------------------------------------------------------------
-        account = new AccountManagement(registerManager, loginManager, viewAccountManager);
-        item = new ItemManagement(itemRepo);
+        notificationRepo = new SQLiteNotificationRepository(database);
+
+        orderRepository = new SQLiteOrderRepository(database);
+        orderItemRepository = new SQLiteOrderItemRepository(database);
+
+
+        // ------------------------------------------------------------
+        // INIT MANAGERS
+        // ------------------------------------------------------------
+
+        RegisterManager registerMgr = new RegisterManager(userRepo, authService);
+        LoginManager loginMgr = new LoginManager(userRepo, authService);
+        ViewAccountManager viewAccountMgr = new ViewAccountManager(userRepo);
+        EditAccountManager editAccountMgr = new EditAccountManager(userRepo, authService);
+
+        BrowseItemManager browseMgr = new BrowseItemManager(itemRepository);
+        EditItemManager editItemMgr = new EditItemManager(itemRepository);
+        LikeManager likeMgr = new LikeManager(itemRepository);
+        RankingManager rankingMgr = new RankingManager(rankingRepo, itemRepository);
+
+        paymentCardManager = new PaymentCardManager(cardRepo);
+        paymentAuthManager = new PaymentAuthorizationManager(cardRepo, txnRepo, broker);
+        paymentTxnManager = new PaymentTransactionManager(txnRepo);
+        SendReceiptManager receiptMgr = new SendReceiptManager(new EmailService(broker));
+
+        paymentController = new PaymentControllerManager(
+                paymentCardManager,
+                paymentAuthManager,
+                paymentTxnManager,
+                receiptMgr,
+                broker
+        );
+
+        // ------------------------------------------------------------
+        // INIT SUBSYSTEMS
+        // ------------------------------------------------------------
+
+        account = new AccountManagement(registerMgr, loginMgr, viewAccountMgr);
+        item = new ItemManagement(itemRepository);
         messaging = new Messaging();
-        order = new OrderManagement();
-        payment = new PaymentService();
-        reporting = new Reporting(reportManager);
-        wishlist = new WishlistManagement(wishlistRepo, itemRepo);
+        orderSubsystem = new OrderManagement(
+                broker,
+                orderRepository,
+                orderItemRepository,
+                itemRepository,
+                wishlistRepo,
+                notificationRepo
+        );
+        paymentSubsystem = new PaymentService();
+        reporting = new Reporting();
+        wishlistSubsystem = new WishlistManagement(wishlistRepo, itemRepository);
 
         Subsystems[] modules = {
-                account, item, messaging, order,
-                payment, reporting, wishlist
+                account, item, messaging,
+                paymentSubsystem, paymentSubsystem,
+                reporting, wishlistSubsystem
         };
 
-        for (Subsystems m : modules)
-            m.init(broker);
+        for (Subsystems m : modules) m.init(broker);
 
+        // ============================================================
+        // EVENT LISTENERS
+        // ============================================================
         // Listen for login success/failure so Main can update currentUser and menus
         broker.registerListener(EventType.USER_LOGIN_SUCCESS, msg -> CompletableFuture.runAsync(() -> {
             Object payload = msg.getPayload();
@@ -493,7 +540,7 @@ public class Main {
     // ACTIONS
     // ============================================================
     
-    private static String readPasswordHidden() {
+    public static String readPasswordHidden() {
         Console console = System.console();
         if (console != null) {
             // If console is available, use it to hide password input
