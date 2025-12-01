@@ -12,13 +12,13 @@ import com.common.dto.auth.*;
 import com.common.dto.item.*;
 import com.common.dto.message.*;
 import com.common.dto.order.*;
-import com.common.dto.payment.*;
+import com.common.dto.report.DailyReportRequest;
+import com.common.dto.report.MonthlyReportRequest;
 import com.common.dto.wishlist.*;
 import com.managers.account.*;
 import com.managers.item.*;
-import com.managers.message.*;
 import com.managers.order.*;
-import com.managers.payment.*;
+import com.managers.report.ReportManager;
 import com.managers.wishlist.*;
 
 import java.util.List;
@@ -38,15 +38,7 @@ public class Main {
     private static OrderManagement order;
     private static PaymentService payment;
     private static Reporting reporting;
-
     private static WishlistManagement wishlist;
-    private static AddWishlistManager addWishlist;
-    private static RemoveWishlistManager removeWishlist;
-    private static ViewWishlistManager viewWishlist;
-
-    private static BrowseItemManager browseItem;
-    private static CreateOrderManager createOrder;
-    private static ViewAccountManager viewAccount;
 
     // Broker + DB
     private static AsyncMessageBroker broker;
@@ -88,6 +80,10 @@ public class Main {
         ItemRepository itemRepo = new SQLiteItemRepository(database);
         ItemRankingRepository itemRankingRepo = new com.repository.InMemoryItemRankingRepository();
 
+        ReportRepository reportRepo = new SQLiteReportRepository(database);
+        ReportManager reportManager = new ReportManager(reportRepo, null, itemRepo); // null for OrderRepository until
+                                                                                     // implemented
+
         BrowseItemManager browseItemManager = new BrowseItemManager(itemRepo);
 
         CreateOrderManager createOrderManager = new CreateOrderManager(itemRepo, null, null);
@@ -96,9 +92,9 @@ public class Main {
         RankingManager rankingManager = new RankingManager(itemRankingRepo, itemRepo);
 
         WishlistRepository wishlistRepo = new SQLiteWishlistRepository(database);
-        addWishlist = new AddWishlistManager(wishlistRepo, itemRepo);
-        removeWishlist = new RemoveWishlistManager(wishlistRepo);
-        viewWishlist = new ViewWishlistManager(wishlistRepo, itemRepo);
+        AddWishlistManager addWishlist = new AddWishlistManager(wishlistRepo, itemRepo);
+        RemoveWishlistManager removeWishlist = new RemoveWishlistManager(wishlistRepo);
+        ViewWishlistManager viewWishlist = new ViewWishlistManager(wishlistRepo, itemRepo);
 
         // --------------------------------------------------------------
         // 4. Init Subsystems
@@ -108,7 +104,7 @@ public class Main {
         messaging = new Messaging();
         order = new OrderManagement();
         payment = new PaymentService();
-        reporting = new Reporting();
+        reporting = new Reporting(reportManager);
         wishlist = new WishlistManagement(wishlistRepo, itemRepo);
 
         Subsystems[] modules = {
@@ -402,6 +398,22 @@ public class Main {
             }
         }));
 
+        // Add event listener for report completion:
+        broker.registerListener(EventType.REPORT_GENERATION_COMPLETE, msg -> CompletableFuture.runAsync(() -> {
+            Object payload = msg.getPayload();
+            if (payload instanceof Report report) {
+                System.out.println("=== REPORT GENERATED ===");
+                System.out.println("ID: " + report.getId());
+                System.out.println("Type: " + report.getReportType());
+                System.out.println("Generated: " + new java.util.Date(report.getDateGenerated()));
+                System.out.println("Period Start: " + new java.util.Date(report.getDataStart()));
+                System.out.println("");
+                System.out.println("FULL REPORT DATA:");
+                System.out.println(report.getReportData());
+                System.out.println("========================");
+            }
+        }));
+
         // Handle notification responses
         broker.registerListener(EventType.NOTIFICATION_SENT, msg -> CompletableFuture.runAsync(() -> {
             System.out.println("[Notification] " + msg.getPayload());
@@ -450,16 +462,20 @@ public class Main {
         System.out.println("""
                 ----- Welcome -----
                 1. Login
-                2. Register
-                3. Browse Items
+                2. Register (Customer)
+                3. Register with Role Selection
+                4. Browse Items
                 Q. Quit
                 """);
     }
 
     private static void showCustomerMenu() {
         lastMenu = "CUSTOMER";
+        String userInfo = (currentUser != null)
+                ? String.format(" [Logged in as: %s (%s)]", currentUser.getUsername(), currentUser.getRole())
+                : "";
         System.out.println("""
-                ----- Customer -----
+                ----- Customer Menu%s -----
                 1. Browse Items
                 2. Search Items
                 3. View Wishlist
@@ -472,13 +488,16 @@ public class Main {
                 10. View Account
                 11. Logout
                 Q. Quit
-                """);
+                """.formatted(userInfo));
     }
 
     private static void showStaffMenu() {
         lastMenu = "STAFF";
+        String userInfo = (currentUser != null)
+                ? String.format(" [Logged in as: %s (%s)]", currentUser.getUsername(), currentUser.getRole())
+                : "";
         System.out.println("""
-                ----- Staff -----
+                ----- Staff Menu%s -----
                 1. Refill Inventory
                 2. Upload Item
                 3. Edit Item
@@ -487,17 +506,20 @@ public class Main {
                 6. Reply to Customer
                 7. Logout
                 Q. Quit
-                """);
+                """.formatted(userInfo));
     }
 
     private static void showCEOMenu() {
         lastMenu = "CEO";
+        String userInfo = (currentUser != null)
+                ? String.format(" [Logged in as: %s (%s)]", currentUser.getUsername(), currentUser.getRole())
+                : "";
         System.out.println("""
-                ----- CEO -----
+                ----- CEO Menu%s -----
                 1. View Sales Report
                 2. Logout
                 Q. Quit
-                """);
+                """.formatted(userInfo));
     }
 
     // ============================================================
@@ -517,7 +539,8 @@ public class Main {
         switch (input) {
             case "1" -> login();
             case "2" -> register();
-            case "3" -> browseItems();
+            case "3" -> registerWithRoleSelection();
+            case "4" -> browseItems();
         }
     }
 
@@ -573,13 +596,48 @@ public class Main {
     private static void register() {
         System.out.println("Username:");
         String username = scanner.nextLine();
-        System.out.println("Email:");
+        System.out.print("Email: ");
         String email = scanner.nextLine();
-        System.out.println("Password:");
+        System.out.print("Password: ");
         String pw = scanner.nextLine();
 
         broker.publish(EventType.USER_REGISTER_REQUESTED,
                 new RegistrationRequest(username, email, pw, com.entities.User.Role.CUSTOMER, null, null));
+        System.out.println("Registration request sent...");
+    }
+
+    private static void registerWithRoleSelection() {
+        System.out.println("=== Registration with Role Selection ===");
+        System.out.print("Username: ");
+        String username = scanner.nextLine();
+        System.out.print("Email: ");
+        String email = scanner.nextLine();
+        System.out.print("Password: ");
+        String pw = scanner.nextLine();
+
+        System.out.println("\nSelect Role:");
+        System.out.println("1. Customer");
+        System.out.println("2. Staff");
+        System.out.println("3. CEO");
+        System.out.print("Choice (1-3): ");
+
+        User.Role selectedRole;
+        String roleChoice = scanner.nextLine();
+
+        switch (roleChoice) {
+            case "1" -> selectedRole = User.Role.CUSTOMER;
+            case "2" -> selectedRole = User.Role.STAFF;
+            case "3" -> selectedRole = User.Role.CEO;
+            default -> {
+                System.out.println("Invalid choice. Defaulting to Customer.");
+                selectedRole = User.Role.CUSTOMER;
+            }
+        }
+
+        System.out.println("Registering as: " + selectedRole);
+        broker.publish(EventType.USER_REGISTER_REQUESTED,
+                new RegistrationRequest(username, email, pw, selectedRole, null, null));
+        System.out.println("Registration request sent...");
     }
 
     private static void logout() {
@@ -742,7 +800,30 @@ public class Main {
     }
 
     private static void viewSalesReport() {
-        broker.publish(EventType.REPORT_VIEW_REQUESTED, null);
+        if (currentUser.getRole() != User.Role.CEO) {
+            System.out.println("Access denied. Only CEO can view reports");
+            return;
+        }
+
+        System.out.println("1. Daily Report");
+        System.out.println("2. Monthly Report");
+        System.out.print("Choose report type: ");
+
+        String choice = scanner.nextLine();
+
+        switch (choice) {
+            case "1" -> {
+                DailyReportRequest request = new DailyReportRequest(currentUser.getId());
+                broker.publish(EventType.TIMER_TRIGGER_DAILY_REPORT, request);
+                System.out.println("Generating daily report...");
+            }
+            case "2" -> {
+                MonthlyReportRequest request = new MonthlyReportRequest(currentUser.getId());
+                broker.publish(EventType.TIMER_TRIGGER_MONTHLY_REPORT, request);
+                System.out.println("Generating monthly  report...");
+            }
+            default -> System.out.println("Invalid choice");
+        }
     }
 
     // ============================================================

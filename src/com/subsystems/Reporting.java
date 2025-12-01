@@ -6,6 +6,7 @@ import com.broker.Listener;
 import com.broker.Message;
 import com.entities.Report;
 import com.entities.User;
+import com.managers.report.ReportManager;
 
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
@@ -19,6 +20,11 @@ import java.util.logging.Logger;
  * - generateReport() returns a FORM (structure only), not sample data
  */
 public class Reporting implements Subsystems {
+    private final ReportManager reportManager;
+
+    public Reporting(ReportManager reportManager) {
+        this.reportManager = reportManager;
+    }
 
     private static final Logger LOGGER = Logger.getLogger(Reporting.class.getName());
 
@@ -116,33 +122,15 @@ public class Reporting implements Subsystems {
         });
     }
 
-    /**
-     * generateReport(): returns a STRUCTURE ONLY, not actual numbers
-     */
     private Report generateReport(Report.ReportType type) {
-
-        long now = Instant.now().toEpochMilli();
-
-        String jsonForm = """
-                    {
-                      "reportType": "%s",
-                      "generatedAt": %d,
-                      "structure": {
-                        "totalSales": "<number>",
-                        "totalOrders": "<number>",
-                        "items": [
-                          { "productId": "<id>", "quantitySold": "<number>" }
-                        ]
-                      }
-                    }
-                """.formatted(type, now);
-
-        return new Report(
-                0, // id (not persisted yet)
-                type, // DAILY or MONTHLY
-                now, // dateStart (placeholder)
-                now, // dateGenerated
-                jsonForm // STRUCTURE ONLY
-        );
+        switch (type) {
+            case DAILY -> {
+                return reportManager.generateDailyReport();
+            }
+            case MONTHLY -> {
+                return reportManager.generateMonthlyReport();
+            }
+            default -> throw new IllegalArgumentException("Unknown report type: " + type);
+        }
     }
 }
